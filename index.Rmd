@@ -1,0 +1,993 @@
+---
+title: "Re-validation of Body Image Dimension in the Body Investment Scale through Network Analysis"
+author: "Diego Diaz-Milanes"
+date: "27/12/2025"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    collapse: true
+    smooth_scroll: true
+    theme: journal
+    highlight: kate
+    df_print: paged
+    code_folding: hide
+---
+
+# 0. STUDY CONTEXT AND OBJECTIVES
+
+**Tile:** Re-validation of Body Image Dimension in the Body Investment Scale through Network Analysis
+
+**Authors:**  
+Diego Diaz-Milanes<sup>1,2,&#42;</sup>
+
+**Affiliation:**
+
+<sup>1</sup> Department of Quantitative Methods, Universidad Loyola Andalucía, Sevilla, Spain
+
+<sup>2</sup> Health Research Institute, University of Canberra, Canberra, ACT, Australia
+
+**Corresponding Authors:**
+
+<ddiaz@uloyola.es>
+
+This R Markdown document includes the data and R code associated with the present study, with the aim of ensuring full transparency and replicability of the data analysis.
+
+The analysis is structured into six main steps. First, the dataset was loaded and preprocessed. Second, descriptive analyses were performed to examine the sociodemographic characteristics of the participants, the distribution of the items related to leisure, and potential gender differences.
+
+Third, network analysis was conducted on the items. Fourth, tests of network invariance were applied to compare structural differences across gender groups. Fifth, a Bayesian network model was estimated. Finally, the predictive capacity of the different models was evaluated.
+
+# 1. DATA LOADING & PROCESSING {.tabset}
+
+```{r temporal_folder, echo=FALSE}
+knitr::opts_chunk$set(
+  fig.path = paste0(tempdir(), "/figures/"),
+  dev = "CairoPNG"
+)
+```
+
+```{r clean_old_figures, echo=FALSE}
+unlink("Network-Analysis-Body-Image-files/figure-html", recursive = TRUE)
+```
+
+In this section, the packages, function design, and data used are listed. Then, data processing—including variable selection and filtering by units of analysis—was performed.
+
+## 1.1. Import Packages
+A total of 17 packages were loaded:
+
+```{r loading_packages, message=FALSE, warning=FALSE}
+library(haven)
+library(tidyr)
+library(dplyr)
+library(psych)
+library(ggplot2)
+library(semTools)
+library(effectsize)
+library(EGAnet)
+library(qgraph)
+library(NetworkComparisonTest)
+library(bootnet)
+library(mgm)
+library(bnlearn)
+library(caret)
+library(forcats)
+library(knitr)
+library(kableExtra)
+
+x <- htmltools::HTML("%<%")
+
+# Define the packages and functions (with inline code formatting)
+packages_info <- data.frame(
+  Package = c(
+    "readxl", "tidyr", "dplyr", "psych", "semTools", "ggplot2", "effectsize",
+    "EGAnet", "qgraph", "NetworkComparisonTest", "bootnet", "mgm", "bnlearn",
+    "caret", "forcats", "knitr", "kableExtra"
+  ),
+  Functions = c(
+    "`read_excel`",
+    paste0(x,", reshaping support"),
+    paste0("`select`, `mutate`, `filter`, `group_by`, `summarise`, `bind_rows`, ",x),
+    "`describe`, `polychoric`",
+    "`mardiaSkew`, `mardiaKurtosis`",
+    "`ggplot`, `aes`, `geom_line`, `labs`, `theme_bw`, etc.",
+    "`cohens_d`",
+    "`bootEGA`, `dimensionStability`",
+    "`qgraph`",
+    "`NCT`, `plot`",
+    "`estimateNetwork`, `bootnet`, `corStability`",
+    "`mgm`, `predict`",
+    "`boot.strength`, `averaged.network`, `bn.fit`, `predict`",
+    "`confusionMatrix`",
+    "`fct_reorder`",
+    "`kable`",
+    "`kable_styling`, `add_header_above`"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Get package versions
+packages_info$Version <- sapply(packages_info$Package, function(pkg) {
+  as.character(packageVersion(pkg))
+})
+
+# Reorder columns
+packages_info <- packages_info[, c("Package", "Version", "Functions")]
+
+# Display as a nicely styled table
+knitr::kable(packages_info, caption = "Table 1. Packages Used, Versions, and Functions") %>%
+  kableExtra::kable_styling(full_width = FALSE, position = "center")
+```
+
+Design and generation of a formula for plotting centrality measures of two networks.
+
+```{r}
+compareCentrality <- function(net1, net2,
+                              include = c("Strength",
+                                          "Closeness",
+                                          "Betweenness",
+                                          "ExpectedInfluence",
+                                          "all",
+                                          "All"),
+                              orderBy = c("Strength",
+                                          "Closeness",
+                                          "Betweenness",
+                                          "ExpectedInfluence"),
+                              decreasing = T,
+                              legendName = '',
+                              net1Name = 'Network 1',
+                              net2Name = 'Network 2'){
+  
+  if(include == "All" | include == "all"){
+    include = c("Strength",
+                "Closeness",
+                "Betweenness",
+                "ExpectedInfluence")
+  }
+  
+  df <- centralityTable(net1, net2) %>% filter(measure %in% include)
+  
+  df %>% 
+    mutate(graph = case_when(graph == 'graph 1' ~ net1Name,
+                             graph == 'graph 2' ~ net2Name),
+           graph = as.factor(graph),
+           node = as.factor(node)) %>% 
+    
+    mutate(node = fct_reorder(node, value)) %>% 
+    
+    ggplot(aes(x = node, y = value, group = graph)) +
+    
+    geom_line(aes(linetype = graph), size = 1) +
+    
+    labs(x = '', y = '') +
+    
+    scale_linetype_discrete(name = legendName) +
+    
+    coord_flip() +
+    
+    facet_grid(~measure) +
+    
+    theme_bw()
+  
+}
+```
+
+## 1.2. Data Loading
+
+The dataset from the __Health Behavior in University (HBU)__ project (UHU-6272020) was loaded, including only the minimum set of variables required for the present study. The dataset can be found in the following link: <https://github.com/diediamil/HBU_Leisure_Network_Analysis/blob/main/HBU_INJUVE_Database.xlsx>
+
+```{r loading_data}
+hbu <- read_sav("C:/Users/ddiaz/OneDrive - Universidad Loyola Andalucía/Escritorio/Otros proyectos/DB/DB HBU COMPLETA.sav")
+```
+
+## 1.3. Filtering
+
+Filters were applied to remove participants who did not complete the informed consent (**__informed_consent__**), were minors or outside the typical age range for Spanish university students (from 18 to 26 years old), and to exclude cases with missing values:
+
+```{r filtering_data}
+initial_rows <- nrow(hbu)
+hbu <- hbu[hbu$CI == 1,] 
+hbu <- hbu[!is.na(hbu$SD01),]
+hbu <- hbu[!is.na(hbu$SD02),]
+hbu <- hbu[hbu$SD02 >= 18 & hbu$SD02 <= 26,]
+hbu <- hbu[!is.na(hbu$AUTOIMAGEN),]
+
+print(paste("Initial number of rows:", initial_rows, "| Final number of rows:", nrow(hbu)))
+```
+
+```{r new_dataset}
+hbu
+```
+
+
+## 1.4. Variable Selection
+Creation of dataframes tailored to meet the requirements of the forthcoming data analyses.
+
+**1. Dataframe for the analysis of individual items**
+
+The following table displays the first five rows of the set of items from the INJUVE instrument, used in the present study.
+
+```{r generation_df, echo=TRUE, message=FALSE, warning=FALSE}
+# Prepare the dataframe
+hbu$SD01 <- as.factor(hbu$SD01)
+BIS_total <- dplyr::select(hbu, c(WC006.1:WC006.6))
+names(BIS_total) <- paste0("BIS",c(1:6))
+#BIS_total[,c(1,3,5)] <- 6 - BIS_total[,c(1,3,5)]
+BIS_total[] <- lapply(BIS_total, function(x) suppressWarnings(as.numeric(as.character(x))))
+pieColor <- rep("#EB9446", length(BIS_total))
+
+# Display first 5 rows with a formatted table
+head(BIS_total, 5) %>%
+  kable(caption = "Table 2. Set of items from the BIS") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+**3. Dataframe for assessing model invariance gender year**
+
+The following table displays the first five rows of the dataset used for testing network invariance by gender, including the BIS items and participants' gender.
+
+```{r}
+# Select BIS items and gender for invariance analysis
+BIS_invariance <- dplyr::select(hbu, c(WC006.1:WC006.6, SD01))
+names(BIS_invariance)[1:6] <- paste0("BIS",c(1:6))
+BIS_invariance <- BIS_invariance %>%
+  mutate(across(1:6, ~ suppressWarnings(as.numeric(as.character(.)))))
+names(BIS_invariance)[length(BIS_invariance)] <- "gender"
+BIS_invariance$gender <- case_when(BIS_invariance$gender == 1 ~ "Male",
+                                   BIS_invariance$gender == 2 ~ "Female")
+
+# Display first 5 rows with a styled table
+head(BIS_invariance, 5) %>%
+  kable(caption = "Table 4. BIS items and gender variable for network invariance analysis") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+# 2. DESCRIPTIVE ANALYSIS {.tabset}
+
+## 2.1. Sociodemographic
+Participants distribution by gender and age:
+
+```{r sociodemographic, message=FALSE, warning=FALSE}
+# Gender distribution
+gender_table <- table(BIS_invariance$gender)
+gender_percent <- round(prop.table(gender_table) * 100, 2)
+
+gender_df <- data.frame(
+  Gender = names(gender_table),
+  Frequency = round(as.numeric(gender_table), 2),
+  Percentage = paste0(gender_percent, "%")
+)
+
+# Age summary
+age_summary <- summary(hbu$SD02)
+age_sd <- round(sd(hbu$SD02), 2)
+
+age_df <- data.frame(
+  Statistic = names(age_summary),
+  Value = round(as.numeric(age_summary), 2)
+) %>%
+  bind_rows(data.frame(Statistic = "Standard Deviation", Value = age_sd))
+
+# Display tables
+kable(gender_df, caption = "Table 5. Gender distribution (frequency and %)") %>%
+  kable_styling(full_width = FALSE, position = "center")
+
+kable(age_df, caption = "Table 6. Age summary statistics") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+## 2.2. Items
+
+Univariate descriptive analysis of the items included in the INJUVE instrument:
+
+```{r items_description}
+# Descriptive statistics
+descrgen <- describe(BIS_total)
+
+# Build dataframe with selected stats
+lgen <- list(c(1:6), descrgen$mean, descrgen$sd, descrgen$min,
+             descrgen$max, descrgen$skew, descrgen$kurtosis)
+lgen <- as.data.frame(lgen)
+
+# Round and rename columns
+lgen <- lgen %>% 
+  mutate_if(is.numeric, round, digits = 3)
+
+colnames(lgen) <- c("Item", "Mean", "SD", "Min", "Max", "Skew", "Kurtosis")
+
+# Display table
+kable(lgen, caption = "Table 7. Descriptive statistics for BIS items") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+Assessment of multivariate normality assumptions based on Mardia's tests for skewness and kurtosis, applied to the set of items included in the INJUVE instrument:
+
+```{r multivatiate_normality}
+# Run Mardia's tests
+skew_result <- mardiaSkew(BIS_total)
+kurt_result <- mardiaKurtosis(BIS_total)
+
+# Round and extract values
+mardia_df <- data.frame(
+  Test = c("Mardia Skewness", "Mardia Kurtosis"),
+  Statistic = round(c(skew_result[2], kurt_result[2]), 3),
+  p_value = round(c(skew_result[4], kurt_result[3]), 3)
+)
+row.names(mardia_df) <- 1:2
+# Show table
+kable(mardia_df, caption = "Table 8: Mardia's Tests for Multivariate Normality")
+```
+
+## 2.3. Items by Gender
+
+```{r items_gender}
+#Setting features
+pieColor <- c(rep("#EB9446", length(BIS_total))) # Da color al borde del nodo color naranja
+items <- names(BIS_total)
+item_labels <- c('I am frustrated with my physical appearance',
+                       'I am satisfied with my appearance',
+                       'I hate my body',
+                       'I feel comfortable with my body',
+                       'I feel anger toward my body',
+                       'I like my appearance in spite of its imperfections')
+
+# Crear tabla de resultados
+results <- lapply(seq_along(items), function(i) {
+  item <- items[i]
+  label <- item_labels[i]
+  
+  # Obtener estadísticas por grupo
+  stats <- BIS_invariance %>%
+    group_by(gender) %>%
+    summarise(
+      mean = round(mean(.data[[item]], na.rm = TRUE), 3),
+      sd = round(sd(.data[[item]], na.rm = TRUE), 3)
+    )
+  
+  male_val <- paste0(stats$mean[stats$gender == "Male"], " (", stats$sd[stats$gender == "Male"], ")")
+  female_val <- paste0(stats$mean[stats$gender == "Female"], " (", stats$sd[stats$gender == "Female"], ")")
+  
+  # t-test
+  t_result <- t.test(as.formula(paste(item, "~ gender")), data = BIS_invariance)
+  t_stat <- round(t_result$statistic, 3)
+  df <- round(t_result$parameter, 3)
+  p_val <- round(t_result$p.value,3)
+    
+  # Efecto (Cohen's d)
+  d_val <- cohens_d(as.formula(paste(item, "~ gender")), data = BIS_invariance)$Cohens_d
+  d_val <- round(d_val, 3)
+  
+  # Combinar resultados
+  data.frame(
+    Item = label,
+    Male = male_val,
+    Female = female_val,
+    T_statistic = paste0(t_stat, " (", df, ")"),
+    p_value = p_val,
+    Effect_size = d_val
+  )
+})
+
+# Unir todos los ítems
+final_table <- bind_rows(results)
+
+# Mostrar tabla
+kable(final_table, caption = "Table 9. Mean (SD) by Gender, t-test Results, p-value and Effect Sizes for BIS Items")
+```
+
+# 3. NETWORK ANALYSIS {.tabset}
+## 3.1. Community Identification {.tabset}
+A bootstrap exploratory graph analysis (EGA) was performed to estimate the number, structure, and stability of variable communities (i.e., network dimensions) based on their structural consistency. In this context, a community refers to a cluster of nodes that exhibit strong interconnections through edges.
+
+### 3.1.1 Community Estimation
+The analysis facilitates the identification and delineation of such communities, as well as the allocation of individual items to their corresponding dimensions.
+
+```{r community_identification, message=FALSE, fig.align='center', fig.cap='Figure 1. Community Estimation'}
+set.seed(123)
+communities <- bootEGA(BIS_total,
+                       model = "glasso",
+                       type = "resampling",
+                       iter = 1000,
+                       typicalStructure = TRUE,
+                       plot.typicalStructure = TRUE)
+
+```
+
+### 3.1.2. Community Stability
+Items were retained within their assigned communities only when their stability coefficients exceeded 0.70. Items falling below this threshold were excluded due to their potential to undermine the structural integrity of the corresponding dimension.
+
+```{r stability_community, fig.align='center', fig.cap='Figure 2. Community Stability'}
+# Structural consistency
+communities.dimstab <- dimensionStability(communities)
+```
+Regarding the communities stability it was:
+
+```{r communities_dim_stab}
+communities.dimstab$dimension.stability
+```
+
+Regarding the items stability it was:
+
+```{r}
+communities.dimstab$item.stability
+```
+
+## 3.2. Gaussian Graphical Models (GGMs) {.tabset}
+### 3.2.1. Network Estimation
+
+```{r network_estimation, fig.align='center', fig.width = 18, fig.height = 12, fig.cap='Figure 3. Gaussian Graphical Model Estimation'}
+
+group_list <- c(rep('Body Image - Body Investment Scale',6))
+
+INJU_poly <- polychoric(BIS_total)
+
+# Graficar red
+suppressMessages(suppressWarnings({
+INJU_glasso <- qgraph::qgraph(
+  INJU_poly$rho,
+  graph        = "glasso",
+  layout       = "spring",
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  labels       = TRUE,
+  threshold    = TRUE,
+  sampleSize   = nrow(BIS_total),
+  vsize        = 5,
+  esize        = 5,
+  asize        = 6,
+  border.width = 1,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+}))
+```
+
+
+```{r netowrk_density}
+possible_edges <- (ncol(BIS_total)*(ncol(BIS_total)-1))/2
+real_edges <- length(INJU_glasso$Edgelist$weight)
+density <- round(real_edges/possible_edges*100, digits = 2)
+
+# Print explanation and result
+cat("Number of potential edges:", possible_edges, "\n")
+cat("Number of real edges:", real_edges, "\n")
+cat("Network density (percentage of actual edges out of all possible undirected edges):", density, "%\n")
+```
+```{r weight_evaluation}
+# Extract edge weights
+edge_weights <- INJU_glasso$Edgelist$weight
+
+# Calculate summary statistics
+mean_weight <- round(mean(edge_weights), digits = 3)
+sd_weight <- round(sd(edge_weights), digits = 3)
+max_weight <- round(max(edge_weights), digits = 3)
+min_weight <- round(min(edge_weights), digits = 3)
+
+# Print explanation and results clearly
+cat("Standard Edge Weight \n")
+cat("The average edge weight was:", mean_weight, "(SD:", sd_weight, ")\n")
+cat("Minimum weight:", min_weight, "| Maximum weight:", max_weight, "\n")
+
+# Calculate summary statistics
+mean_weight <- round(mean(abs(edge_weights)), digits = 3)
+sd_weight <- round(sd(abs(edge_weights)), digits = 3)
+max_weight <- round(max(abs(edge_weights)), digits = 3)
+min_weight <- round(min(abs(edge_weights)), digits = 3)
+
+# Print explanation and results clearly
+cat("\n")
+cat("Absolute Values \n")
+cat("The average edge weight was:", mean_weight, "(SD:", sd_weight, ")\n")
+cat("Minimum weight:", min_weight, "| Maximum weight:", max_weight, "\n")
+```
+
+### 3.2.2. Network characterization
+
+```{r network_characterization, message=FALSE, warning=FALSE, fig.width = 18, fig.height = 12, fig.align='center', fig.cap='Figure 4. Gaussian Graphical Model Characterization'}
+INJU_matrix <- as.matrix(BIS_total)
+invisible(capture.output({SV_mgm <-mgm(
+    data = INJU_matrix,
+    type = rep("g", length(BIS_total)),
+    level = rep(1, length(BIS_total)),
+    k = 2,
+    verbatim = TRUE,
+    warnings = TRUE
+  )
+}))
+
+#Predice la varianza explicada de cada nodo y otros parametros
+SV_predic <- predict(SV_mgm, BIS_total, error.continuous = "VarExpl")
+
+suppressMessages(suppressWarnings({
+INJU_glasso_predicted <- qgraph::qgraph(
+  cor_auto(BIS_total),
+  graph        = "glasso",
+  layout       = "spring",
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  labels       = TRUE,
+  threshold    = TRUE,
+  sampleSize   = nrow(BIS_total),
+  pie          = SV_predic$errors$R2,
+  pieColor     = pieColor,
+  vsize        = 5,
+  esize        = 5,
+  asize        = 6,
+  border.width = 0.9,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+}))
+```
+
+## 3.3. Centrality Measures {.tabset}
+### 3.3.1. Centality Estimation
+```{r centrality_estimation, message=FALSE, fig.align='center', fig.cap='Figure 5. Centrality Measures Estimation'}
+centrality_INJU <- centralityPlot(INJU_glasso, include = 
+                                  c("Betweenness","Closeness","Strength","ExpectedInfluence"),
+                                orderBy ="Betweenness", scale = "z-scores")
+```
+
+### 3.3.2. Centrality Stability
+```{r centrality_stability, message=FALSE, warning=FALSE,  fig.align='center', fig.cap='Figure 6. Centrality Measures Stability'}
+set.seed(2025)
+# 1. Estimar la red con EBICglasso
+glasso_net <- estimateNetwork(BIS_total, 
+                              default = "EBICglasso", 
+                              corMethod = "cor_auto",
+                              verbose = FALSE)
+
+set.seed(2025)
+# 2. Bootstrap de estabilidad (case-dropping)
+boot_results <- bootnet(glasso_net,
+                        nBoots = 1000,
+                        nCores = 12,
+                        type = "case",
+                        statistics = "all",
+                        verbose = FALSE)
+
+# 3. Plot de estabilidad de centralidad (bootstrap case-dropping)
+plot(boot_results,
+     statistics = c("strength", "closeness", "betweenness","expectedInfluence"),
+     labels = TRUE,
+     order = "sample",
+     legend = TRUE,
+     color = "darkblue",
+     line = TRUE,
+     main = "Bootstrap Centrality Stability (Case Dropping)")
+```
+
+```{r centrality_estability_coefficients, message=FALSE}
+# 4. Coeficientes de estabilidad de centralidad
+cs_coeffs <- corStability(boot_results, verbose = FALSE)
+
+# Crear tabla
+cs_table <- data.frame(
+  Centrality = c("Betweenness", "Closeness", "Strength", "ExpectedInfluence"),
+  CS_Coefficient = round(c(cs_coeffs[1], cs_coeffs[2], cs_coeffs[10], cs_coeffs[6]), 3)
+)
+row.names(cs_table) <- 1:4
+
+# Mostrar como tabla en R Markdown
+knitr::kable(cs_table, caption = "Table 10: Centrality Stability Coefficients (CS)")
+```
+
+# 4. NETWORK COMPARISON {.tabset}
+## 4.1. General
+
+```{r df_split, message=FALSE, warning=FALSE}
+INJU_male <- BIS_invariance[BIS_invariance$gender == "Male",-length(BIS_invariance)]
+INJU_female <- BIS_invariance[BIS_invariance$gender == "Female",-length(BIS_invariance)]
+
+set.seed(12)
+EN_male = estimateNetwork(INJU_male, default = "EBICglasso", corMethod = "cor_auto")
+EN_female = estimateNetwork(INJU_female, default = "EBICglasso", corMethod = "cor_auto")
+```
+
+
+```{r plot_network_comparison, message=FALSE, warning=FALSE}
+set.seed(123)
+invisible(capture.output({
+  res <- NCT(
+    INJU_female,
+    INJU_male,
+    p.adjust.methods = "BH",
+    binary.data = FALSE,
+    test.edges = TRUE,
+    edges = "all",
+    it = 1000
+  )
+}))
+
+female_str <- round(res$glstrinv.sep[1], 3)
+male_str <- round(res$glstrinv.sep[2], 3)
+p_str <- ifelse(res$glstrinv.pval < 0.001, "p < 0.001", paste0("p = ", round(res$glstrinv.pval, 3)))
+
+dif_net <- round(res$nwinv.real, 3)
+p_net <- ifelse(res$nwinv.pval < 0.001, "p < 0.001", paste0("p = ", round(res$nwinv.pval, 3)))
+
+p_edges <- paste(
+  dplyr::filter(res$einv.pvals, `p-value` < 0.05) %>%
+    dplyr::mutate(pair = paste(Var1, "-", Var2)) %>%
+    dplyr::pull(pair),
+  collapse = ", "
+)
+
+```
+
+A comparison of global strength values revealed that the female network exhibited a slightly higher overall connectivity (S = `r female_str`) than the male network (S = `r male_str`). The difference in global strength **was statistically significant** with a p-value of `r p_str`, as shown in **Figure 7**. This suggests a modest but meaningful difference in the total connectivity between genders.
+
+```{r p_strength, message=FALSE, warning=FALSE, fig.align='center', fig.cap='Figure 7. P-values for differences in network strength between genders'}
+plot(res, what="strength")
+```
+
+The network structure invariance test revealed a difference of `r dif_net` between the female and male networks. However, this difference was **not statistically significant** (`r p_net`), suggesting that the overall structure of the two networks can be considered similar.
+
+```{r p_network, message=FALSE, warning=FALSE, fig.align='center', fig.cap='Figure 8. P-values for differences in network structure between genders'}
+plot(res, what="network")
+```
+```{r}
+p_edges
+```
+
+
+## 4.2. Networks by Gender
+**Female's Network**
+```{r female_network, message=FALSE, warning=FALSE, fig.width = 18, fig.height = 12, fig.align='center', fig.cap='Figure 9. Networks of Female Participants'}
+# --- FEMALE GROUP ---
+
+# Convert data to matrix
+INJU_female_matrix <- as.matrix(INJU_female)
+
+# Estimate MGM model (defines number of variables, order of interactions, and input data)
+invisible(capture.output({
+  INJU_mgm_female <- mgm(
+    data = INJU_female_matrix,
+  type = rep("g", length(INJU_female)),
+  level = rep(1, length(INJU_female)),
+  k = 2,
+  warnings = TRUE,
+  verbatim = TRUE
+  )
+}))
+
+# Predict explained variance (R²) and other node-level metrics
+INJU_predic_female <- predict(
+  INJU_mgm_female,
+  INJU_female,
+  error.continuous = "VarExpl"
+)
+
+# Plot the network with R² represented as pie charts on nodes
+suppressMessages(suppressWarnings({
+INJU_glasso_predicted_female <- plot(
+  EN_female,
+  layout = INJU_glasso_predicted$layout,
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  labels       = TRUE,
+  threshold    = FALSE,
+  sampleSize   = nrow(INJU_female),
+  pie          = INJU_predic_female$errors$R2,
+  pieColor     = pieColor,
+  vsize        = 5,
+  esize        = 5,
+  asize        = 6,
+  border.width = 0.9,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+}))
+
+```
+
+**Male's network**
+
+```{r male_network, message=FALSE, warning=FALSE, fig.align='center', fig.width = 18, fig.height = 12, fig.cap='Figure 10. Networks of Male Participants'}
+# --- MALE GROUP ---
+
+# Convert data to matrix
+INJU_male_matrix <- as.matrix(INJU_male)
+
+# Estimate MGM model (defines number of variables, order of interactions, and input data)
+invisible(capture.output({
+  INJU_mgm_male <- mgm(
+    data = INJU_male_matrix,
+    type = rep("g", length(INJU_male)),
+    level = rep(1, length(INJU_male)),
+    k = 2,
+    warnings = TRUE,
+    verbatim = TRUE
+  )
+}))
+
+# Predict explained variance (R²) and other node-level metrics
+INJU_predic_male <- predict(
+  INJU_mgm_male,
+  INJU_male,
+  error.continuous = "VarExpl"
+)
+
+# Plot the network with R² represented as pie charts on nodes
+suppressMessages(suppressWarnings({
+INJU_glasso_predicted_male <- plot(
+  EN_male,
+  layout = INJU_glasso_predicted$layout,
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  labels       = TRUE,
+  threshold    = FALSE,
+  sampleSize   = nrow(INJU_male),
+  pie          = INJU_predic_male$errors$R2,
+  pieColor     = pieColor,
+  vsize        = 5,
+  esize        = 5,
+  asize        = 6,
+  border.width = 0.9,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+}))
+```
+
+
+## 4.3. Centrality Measures
+To evaluate the invariance of the centrality measures network across genders.
+
+```{r centrality_comparison_plot, message=FALSE, warning=FALSE, fig.align='center', fig.cap='Figure 11. Centrality comparison between female and male networks'}
+# Compare centralities between networks
+network_comparison <- compareCentrality(
+  INJU_glasso_predicted_female,
+  INJU_glasso_predicted_male,
+  include = "all",
+  legendName = "Centrality Measures by Gender",
+  net1Name = "Female",
+  net2Name = "Male"
+)
+plot(network_comparison)
+```
+
+The Network Comparison Test identified some statistically significant differences in edge strength between the female and male networks after applying the Benjamini–Hochberg procedure to correct p-values for multiple comparisons. The significance level was set at the conventional threshold of 0.05 (see **Table 11**). However, these results should be interpreted with caution, as the overall network structure and edge weights showed no general differences. Thus, the observed variations may not be practically relevant.
+
+```{r centrality_comparison, message=FALSE, warning=FALSE}
+set.seed(123)
+invisible(capture.output({
+  nct_test_centrality <- NCT(
+    INJU_female,
+    INJU_male,
+    p.adjust.methods = "BH",
+    binary.data = FALSE,
+    test.centrality = TRUE,
+    edges = "all",
+    centrality = c("closeness", "betweenness", "strength", "expectedInfluence"),
+    it = 1000
+  )
+}))
+
+# Extract p-values and convert to data frame
+centrality_pvals <- as.data.frame(nct_test_centrality$diffcen.pval)
+
+# Round to 3 decimals (and adjust "< 0.001" if you want a more elegant output)
+centrality_pvals_rounded <- round(centrality_pvals, 3)
+
+# Optional: add row names as a column
+centrality_pvals_rounded$Node <- rownames(centrality_pvals_rounded)
+centrality_pvals_rounded <- centrality_pvals_rounded[, c("Node", setdiff(names(centrality_pvals_rounded), "Node"))]
+row.names(centrality_pvals_rounded) <- 1:6
+
+# Display as table
+kable(centrality_pvals_rounded, caption = "Table 11. P-values for Centrality Differences (NCT Test)")
+```
+
+# 5. BAYESIAN NETWORK {.tabset}
+The construction of the **Bayesian network (BN)** is carried out in two steps. Firstly, the
+estimation of the **directed acyclic graph (DAG)** is performed, and secondly, the **BN model** is fitted and validated with the study dataset.
+
+## 5.1. DAG Estimation
+For the **DAG** estimation phase, the _PC Stable_ algorithm with no restrictions was employed. To ensure stability in the obtained **DAG**, a total of 200 bootstrap samples were drawn, and only the edges with a strength greater than 0.85 and a direction greater than 0.5 were retained in the final model.
+
+```{r dag, message=FALSE, warning=FALSE, fig.align='center', fig.width = 18, fig.height = 12, fig.cap='Figure 12. Directed Acyclic Graph (DAG)'}
+set.seed(1234)
+bootstr <- boot.strength(BIS_total, R = 200, algorithm = "pc.stable")
+
+avgnet <- averaged.network(bootstr, threshold = 0.85)
+
+sp <- strength.plot(avgnet, bootstr, shape = "ellipse", render = FALSE)
+
+INJU_DAG_qgraph <- qgraph::qgraph(
+  sp, layout = "spring",
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  labels       = TRUE,
+  threshold    = FALSE,
+  sampleSize   = nrow(BIS_total),
+  vsize        = 4.5,
+  esize        = 3,
+  asize        = 3,
+  border.width = 0.9,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+```
+
+## 5.2. Bayesian Network Validation
+To fit and validate the **BN model** in the second phase of the process, the dataset was subdivided into 10 folds. A routine was implemented in which 90% of the folds were used to train the model, and the remaining 10% were used for testing. This cross-validation routine was repeated until all potential combinations were explore.
+
+```{r bayesian_network, message=FALSE, warning=FALSE, fig.align='center', fig.width = 18, fig.height = 12, fig.cap='Figure 13. Bayesian Network (BN) Model'}
+pieColor <- c(rep("#EB9446", length(BIS_total))) # Da color al borde del nodo color naranja                        
+#Cross-validation (Check spatial cross-validation: blockCV)
+set.seed(1234)
+# Split data in 5 sets
+kf <- dismo::kfold(nrow(BIS_total), k = 10) # k-fold partitioning
+models_fit <- c()
+
+for (var in names(BIS_total)) {
+  kfold_fit <- c()
+  aux_base <- data.frame('variable'=var)
+  if(is.numeric(BIS_total[[var]])){
+    for(k in 1:10) {
+      test <- BIS_total[kf == k, ]
+      train <- BIS_total[kf != k, ]
+      
+      training <- bn.fit(avgnet,train)
+      pred <- predict(training, node = var, data = test)
+      
+      z <- data.frame( R2 = R2(pred, test[[var]]),
+                       RMSE = RMSE(pred, test[[var]]),
+                       MAE = MAE(pred, test[[var]]))
+      if(is.na(z$R2)){
+        z[is.na(z$R2),] <- 0
+      }
+      kfold_fit <- rbind(kfold_fit, z) 
+    }
+    
+    z <- apply(kfold_fit, 2, mean)
+    z <- cbind(aux_base,as.data.frame(t(z)))
+    models_fit <- rbind(models_fit, z)
+  }else{
+    for(k in 1:10) {
+      # Split data in test and train
+      test <- BIS_total[kf == k, ]
+      train <- BIS_total[kf != k, ]
+      
+      training <- bn.fit(avgnet,train)
+      pred <- predict(training, node = var, data = test)
+      
+      validation <- confusionMatrix(as.factor(pred),test[[var]])
+      z1 <- as.data.frame(t(validation$overall))
+      
+      if(length(levels(BIS_total[[var]])) > 2){
+        z2 <- as.data.frame(t(sapply(as.data.frame(validation$byClass),mean))) 
+      }else{
+        z2 <- as.data.frame(t(sapply(validation$byClass,mean))) 
+      }
+      z <- cbind(z1, z2)
+      
+      kfold_fit <- rbind(kfold_fit, z)
+    }
+    z <- apply(kfold_fit, 2, mean)
+    z <- cbind(aux_base,z)
+    models_fit <- rbind(models_fit, z)
+  }
+}
+
+INJU_BN_qgraph <- qgraph::qgraph(
+  sp, layout = "spring",
+  groups       = group_list,
+  palette      = "ggplot2",
+  nodeNames    = item_labels,
+  pieColor = pieColor,
+  pie = models_fit$R2,
+  labels       = TRUE,
+  threshold    = FALSE,
+  sampleSize   = nrow(BIS_total),
+  vsize        = 4.5,
+  esize        = 3,
+  asize        = 3,
+  border.width = 0.9,
+  border.color = "black",
+  unCol        = "black",
+  theme        = "colorblind",
+  legend       = TRUE,          # <‑‑ leyenda automática
+  legend.cex   = 0.8,           # tamaño texto de la leyenda
+  layoutScale  = c(0.8, 0.8),   # encoge ligeramente la red
+  rescale      = TRUE
+)
+```
+
+# 6. PREDICTAIBILITY CAPACITY
+
+The explained _variance (R²)_ and _prediction error (RMSE)_ for each item were estimated using **partial-correlation networks (GGMs)** for the full sample (General), and separately for female and male participants (see **Table 12**). Across all GGM models, _**Item 3**_ consistently showed the highest explained variance (General: R² = 0.742; Female: R² = 0.741; Male: R² = 0.723) and the lowest RMSE (General: 0.508), indicating it is the most predictable item based on the rest of the network.
+
+In contrast, _**Item 6**_ had the lowest explained variance (General: R² = 0.553; Male: R² = 0.494) and the highest RMSE (General: 0.668; Male: 0.710), making it the least predictable across the GGM models.
+
+A notable gender difference was observed for _**Item 1**_, with R² values of 0.636 in females and 0.530 in males, a discrepancy of 0.106, suggesting higher predictability for females on this item.
+
+Regarding the Bayesian Network (BN) model, _**Item 3**_ again showed the highest explained variance (R² = 0.727) and one of the lowest RMSE values (0.525), confirming its predictive relevance across modeling approaches. Conversely, _**Item 1**_ yielded the highest RMSE (0.803) and lower R² (0.568), indicating the poorest prediction accuracy in the BN model. BN estimates were not available for _**Items 2**_ and _**5**_.
+
+```{r predictability, message=FALSE, warning=FALSE}
+# Item labels
+items <- paste("Item", 1:6)
+
+# GGM - General
+ggm_general <- SV_predic$errors %>%
+  transmute(
+    Variable = items,
+    R2_gen = round(R2, 3),
+    RMSE_gen = round(RMSE, 3)
+  )
+
+# GGM - Female
+ggm_female <- INJU_predic_female$errors %>%
+  transmute(
+    R2_fem = round(R2, 3),
+    RMSE_fem = round(RMSE, 3)
+  )
+
+# GGM - Male
+ggm_male <- INJU_predic_male$errors %>%
+  transmute(
+    R2_male = round(R2, 3),
+    RMSE_male = round(RMSE, 3)
+  )
+
+# BN model
+bn <- models_fit %>%
+  transmute(
+    R2_bn = ifelse(R2 == 0, "-", round(R2, 3)),
+    RMSE_bn = ifelse(RMSE == 0, "-", round(RMSE, 3))
+  )
+
+# Combine all safely
+final_table <- bind_cols(ggm_general, ggm_female, ggm_male, bn)
+
+# Set final column names to just "R²" and "RMSE" per section
+names(final_table) <- c(
+  "Variable",
+  rep(c("R²", "RMSE"), times = 4)  # General, Female, Male, BN
+)
+
+# Render with multi-level header
+final_table %>%
+  kable(align = "lcccccccc", booktabs = TRUE,
+        caption = "Table 12. Explained variance and RMSE of partial-correlation network (GGM) and BN models") %>%
+  add_header_above(c(" " = 1, 
+                     "General" = 2, 
+                     "Female" = 2, 
+                     "Male" = 2, 
+                     " " = 2)) %>%
+    add_header_above(c(" " = 1, 
+                     "GGMs" = 6, 
+                     "BN" = 2)) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
